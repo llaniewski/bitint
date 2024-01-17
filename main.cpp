@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <type_traits>
 #include <cstdint>
+#include <functional>
 
 template <int BITS, bool SIGNED> struct getbitint {
     static_assert(BITS <= 64);
@@ -17,33 +18,49 @@ template <> struct getbitint< 33, true > { typedef signed long int type; };
 
 constexpr int  oneif(bool sign) { if (sign) return 1; else return 0; }
 constexpr int  maxbits(int bits1, int bits2) { if (bits1 < bits2) return bits2; else return bits1; }
-constexpr bool sumsign(int sign1, int sign2) { return sign1 || sign2; }
-constexpr int  sumbits(int bits1, bool sign1, int bits2, bool sign2) {
-    return maxbits(bits1-oneif(sign1),bits2-oneif(sign2)) + 1 + oneif(sumsign(sign1,sign2));
-}
-constexpr bool mulsign(int sign1, int sign2) { return sign1 || sign2; }
-constexpr int  mulbits(int bits1, bool sign1, int bits2, bool sign2) {
-    return (bits1-oneif(sign1)) + (bits2-oneif(sign2)) + oneif(sumsign(sign1,sign2));
-}
 constexpr bool narrowing_bitint(int bits1, bool sign1, int bits2, bool sign2) {
     if (sign1 && (!sign2)) return true;
     if (bits1-oneif(sign1) >= bits2-oneif(sign2)) return true;
     return false;
 }
 
-template <int BITS, bool SIGNED = true> class bitint {
+struct op_sum {
+    static constexpr bool sign(int sign1, int sign2) { return sign1 || sign2; }
+    static constexpr int  bits(int bits1, int bits2) { return maxbits(bits1,bits2) + 1; }
+    template <class T> static T fun(const T& a, const T& b) { return a+b; }
+};
+
+struct op_mul {
+    static constexpr bool sign(int sign1, int sign2) { return sign1 || sign2; }
+    static constexpr int  bits(int bits1, int bits2) { return bits1 + bits2; }
+    template <class T> static T fun(const T& a, const T& b) { return a*b; }
+};
+
+template <class T>
+static constexpr int  sign_bits_wrap(int bits1, bool sign1, int bits2, bool sign2) {
+    return T::bits(bits1-oneif(sign1),bits2-oneif(sign2)) + oneif(T::sign(sign1,sign2));
+}
+
+template <int BITS, bool SIGNED = true> class bitint;
+
+template <class OP, int BITS1, bool SIGN1, int BITS2, bool SIGN2 >
+struct bitint_op {
+    typedef bitint< sign_bits_wrap<OP>(BITS1,SIGN1,BITS2,SIGN2), OP::sign(SIGN1,SIGN2) > type;
+    static type fun (const bitint<BITS1, SIGN1>& i1, const bitint<BITS2, SIGN2>& i2) {
+        typedef typename type::type rettype;
+        rettype v1 = i1.value();
+        rettype v2 = i2.value();
+        rettype v3 = OP::template fun<rettype>(v1,v2);
+        type ret(v3);
+        return ret;
+    }
+};
+
+template <int BITS, bool SIGNED> class bitint {
 public:
     typedef typename getbitint<BITS, SIGNED>::type type;
 private:
     type val;
-    template <int BITS_, bool SIGNED_>
-    struct sum {
-        typedef bitint< sumbits(BITS,SIGNED,BITS_,SIGNED_), sumsign(SIGNED,SIGNED_) > type;
-    };
-    template <int BITS_, bool SIGNED_>
-    struct mul {
-        typedef bitint< mulbits(BITS,SIGNED,BITS_,SIGNED_), mulsign(SIGNED,SIGNED_) > type;
-    };
 public:
     static const int bits = BITS;
     static const int typebits = 8*sizeof(type);
@@ -57,27 +74,17 @@ public:
         return val;
     }
     void print() const {
-        printf("bitint< %d (%d), %s >(%ld)\n", bits, typebits, sign ? "signed" : "unsigned", (long int) val);
+        printf("%s bitint< %d >: %ld (%d bits)\n", sign ? "signed" : "unsigned", bits, (long int) val, typebits);
+    }
+    template <class OP, int BITS_, bool SIGNED_>
+    using op = bitint_op< OP, BITS, SIGNED, BITS_, SIGNED_>;
+    template <int BITS_, bool SIGNED_>
+    typename op<op_sum,BITS_,SIGNED_>::type operator+ (const bitint<BITS_, SIGNED_>& other) const {
+        return op<op_sum,BITS_,SIGNED_>::fun(*this, other);
     }
     template <int BITS_, bool SIGNED_>
-    typename sum<BITS_,SIGNED_>::type operator+ (const bitint<BITS_, SIGNED_>& other) const {
-        typedef typename sum<BITS_,SIGNED_>::type rettype;
-        typedef typename rettype::type rettypetype;
-        rettypetype v1 = value();
-        rettypetype v2 = other.value();
-        rettypetype v3 = v1 + v2;
-        rettype ret(v3);
-        return ret;
-    }
-    template <int BITS_, bool SIGNED_>
-    typename mul<BITS_,SIGNED_>::type operator* (const bitint<BITS_, SIGNED_>& other) const {
-        typedef typename mul<BITS_,SIGNED_>::type rettype;
-        typedef typename rettype::type rettypetype;
-        rettypetype v1 = value();
-        rettypetype v2 = other.value();
-        rettypetype v3 = v1 * v2;
-        rettype ret(v3);
-        return ret;
+    typename op<op_mul,BITS_,SIGNED_>::type operator* (const bitint<BITS_, SIGNED_>& other) const {
+        return op<op_mul,BITS_,SIGNED_>::fun(*this, other);
     }
 };
 
